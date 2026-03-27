@@ -32,6 +32,28 @@ async def schedule_daily_message(bot, channel_id, message, hour, minute):
         except Exception as e:
             print(f"❌ 发送定时消息失败: {e}")
 
+def add_daily_task(channel_id: str, message: str, hour: int, minute: int) -> str:
+    """添加每日定时任务"""
+    task_id = f"{channel_id}_{hour}_{minute}"
+    scheduled_tasks[task_id] = {
+        "channel_id": channel_id,
+        "message": message,
+        "hour": hour,
+        "minute": minute
+    }
+    return f"✅ 已设置每日 {hour:02d}:{minute:02d} 在此频道发送消息"
+
+def list_tasks() -> str:
+    """列出所有定时任务"""
+    if not scheduled_tasks:
+        return "📭 当前没有定时任务"
+    
+    tasks_list = []
+    for task_id, task in scheduled_tasks.items():
+        tasks_list.append(f"  - 每日 {task['hour']:02d}:{task['minute']:02d}: {task['message'][:50]}")
+    
+    return "📋 定时任务列表：\n" + "\n".join(tasks_list)
+
 # ========== 工具函数 ==========
 def apply_code_patch(patch_text: str, commit_message: str = "Self-modify") -> str:
     try:
@@ -46,28 +68,6 @@ def apply_code_patch(patch_text: str, commit_message: str = "Self-modify") -> st
 def get_time() -> str:
     now = datetime.now()
     return f"🕐 当前时间：{now.strftime('%Y年%m月%d日 %H:%M:%S')}"
-
-def add_daily_task(channel_id: str, message: str, hour: int, minute: int) -> str:
-    """添加每日定时任务"""
-    task_id = f"{channel_id}_{hour}_{minute}"
-    scheduled_tasks[task_id] = {
-        "channel_id": channel_id,
-        "message": message,
-        "hour": hour,
-        "minute": minute
-    }
-    return f"✅ 已设置每日 {hour:02d}:{minute:02d} 发送消息到频道 {channel_id}"
-
-def list_tasks() -> str:
-    """列出所有定时任务"""
-    if not scheduled_tasks:
-        return "📭 当前没有定时任务"
-    
-    tasks_list = []
-    for task_id, task in scheduled_tasks.items():
-        tasks_list.append(f"  - 每日 {task['hour']:02d}:{task['minute']:02d} 发送到 {task['channel_id']}: {task['message'][:50]}")
-    
-    return "📋 定时任务列表：\n" + "\n".join(tasks_list)
 
 # ========== 工具定义 ==========
 TOOLS = [
@@ -98,16 +98,15 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "add_daily_task",
-            "description": "添加每日定时任务，每天固定时间发送消息",
+            "description": "添加每日定时任务，每天固定时间在当前频道发送消息",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "channel_id": {"type": "string", "description": "Discord 频道 ID"},
                     "message": {"type": "string", "description": "要发送的消息内容"},
                     "hour": {"type": "integer", "description": "小时 (0-23)"},
                     "minute": {"type": "integer", "description": "分钟 (0-59)"}
                 },
-                "required": ["channel_id", "message", "hour", "minute"]
+                "required": ["message", "hour", "minute"]
             }
         }
     },
@@ -127,7 +126,7 @@ SYSTEM_INSTRUCTION = """
 1. **聊天**：正常对话，友好回复。
 2. **查询时间**：只有用户明确说"现在几点"、"时间"时，才调用 get_time。
 3. **修改代码**：只有用户明确说"改代码"、"修改"、"把XX改成XX"时，才调用 apply_code_patch。
-4. **定时任务**：用户说"定时发送"、"每天XX点发消息"时，调用 add_daily_task。
+4. **定时任务**：用户说"每天X点发消息"、"定时发送"时，调用 add_daily_task。
 
 **重要**：
 - 不要主动调用任何工具
@@ -189,11 +188,6 @@ class Agent:
     def set_bot(self, bot):
         """设置 bot 实例，用于定时任务"""
         self.bot = bot
-
-    async def start_scheduled_tasks(self):
-        """启动所有定时任务"""
-        # 这里可以加载保存的任务，目前先空着
-        pass
 
     async def run(self, user_input: str, user_id: str, channel=None) -> str:
         authorized = os.getenv("AUTHORIZED_USERS", "").split(",")
@@ -275,7 +269,11 @@ class Agent:
                     elif func_name == "add_daily_task":
                         if not self.bot:
                             return "❌ 定时任务需要 bot 实例，请重启机器人"
-                        channel_id = args.get("channel_id")
+                        if not channel:
+                            return "❌ 无法获取当前频道"
+                        
+                        # 自动使用当前频道 ID
+                        channel_id = str(channel.id)
                         message = args.get("message")
                         hour = args.get("hour")
                         minute = args.get("minute")
@@ -302,7 +300,6 @@ class Agent:
             raise
 
     async def _use_gemini(self, user_input: str) -> str:
-        # Gemini 部分保持原样
         try:
             model = genai.GenerativeModel(
                 self.gemini_model,
@@ -328,7 +325,6 @@ class Agent:
             raise
 
     async def _use_groq(self, user_input: str, channel=None) -> str:
-        # Groq 部分添加定时任务支持
         try:
             messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
             for msg in self.history:
@@ -364,7 +360,10 @@ class Agent:
                     elif func_name == "add_daily_task":
                         if not self.bot:
                             return "❌ 定时任务需要 bot 实例，请重启机器人"
-                        channel_id = args.get("channel_id")
+                        if not channel:
+                            return "❌ 无法获取当前频道"
+                        
+                        channel_id = str(channel.id)
                         message = args.get("message")
                         hour = args.get("hour")
                         minute = args.get("minute")
