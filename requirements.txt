@@ -1,7 +1,5 @@
 discord.py
 python-dotenv
-cerebras-cloud-sdk
-google-generativeai
 groq
 gitpython
 requests
