@@ -8,8 +8,8 @@ from agent import Agent
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
-# 创建 bot，设置命令前缀（初始为 !，可以被 Agent 修改）
-bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
+# 创建 bot，移除默认的帮助命令
+bot = commands.Bot(command_prefix="!", intents=discord.Intents.all(), help_command=None)
 agent = Agent()
 
 # 将 bot 实例传给 agent（用于定时任务等）
@@ -60,8 +60,8 @@ async def hello(ctx):
     """打招呼"""
     await ctx.send(f"你好 {ctx.author.name}！")
 
-@bot.command()
-async def help(ctx):
+@bot.command(name="helpme", aliases=["commands", "cmds"])
+async def help_command(ctx):
     """显示帮助信息"""
     help_text = """
 **🤖 Discord Agent 帮助菜单**
@@ -69,7 +69,8 @@ async def help(ctx):
 **基础命令：**
 `!ping` - 测试机器人延迟
 `!hello` - 打招呼
-`!help` - 显示此帮助
+`!helpme` 或 `!commands` - 显示此帮助
+`!eval` - 执行代码（仅授权用户）
 
 **AI 对话：**
 直接发送消息（不加 ! 前缀）即可与我对话
