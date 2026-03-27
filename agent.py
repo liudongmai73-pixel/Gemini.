@@ -116,8 +116,9 @@ def set_reminder(message: str, seconds: int) -> str:
     """设置提醒（定时任务）"""
     def remind():
         time.sleep(seconds)
-        # 这里需要发送到 Discord，暂时返回消息
         print(f"⏰ 提醒：{message}")
+        # 注意：这里需要在 Discord 发送消息，但当前无法直接访问 bot
+        # 可以在 run 方法中处理
     
     thread = threading.Thread(target=remind)
     thread.daemon = True
@@ -266,20 +267,36 @@ TOOLS = [
 ]
 
 SYSTEM_INSTRUCTION = """
-你是一个功能强大的 Discord 机器人，拥有以下能力：
+你是 Discord 机器人，可以修改自己的代码。
 
-1. **普通对话**：回答问题、帮助用户
-2. **自我修改代码**：修改自己的代码并推送
-3. **文件管理**：读取、写入、列出、删除文件
-4. **联网搜索**：搜索最新信息
-5. **网络请求**：获取网页内容
-6. **天气查询**：获取城市天气
-7. **时间查询**：获取当前时间
-8. **定时任务**：设置提醒
+**严格规则**：
+1. 当用户说"把命令前缀改成 X"时，你必须：
+   - 生成正确的 diff 补丁
+   - 调用 apply_code_patch 工具
+   - 绝对不能只用文字回复说"改好了"
 
-**重要规则**：
-- 修改代码前必须先展示补丁，等待用户确认
-- 使用中文回复，友好、有帮助
+2. 补丁格式示例：
+--- a/bot.py
++++ b/bot.py
+@@ -12,7 +12,7 @@
+-bot = commands.Bot(command_prefix="!")
++bot = commands.Bot(command_prefix="$")
+
+3. 关于斜杠命令（/命令）：Discord 的 / 命令需要在 Discord Developer Portal 手动配置，无法通过修改代码实现。如果用户问，请解释这一点。
+
+4. 你有以下工具可用：
+   - apply_code_patch: 修改代码
+   - read_file: 读取文件
+   - write_file: 写入文件
+   - list_files: 列出文件
+   - delete_file: 删除文件
+   - search_web: 联网搜索
+   - fetch_url: 获取网页内容
+   - get_weather: 查询天气
+   - get_time: 获取时间
+   - set_reminder: 设置提醒
+
+5. 使用中文回复，友好、有帮助。
 
 现在开始！
 """
@@ -290,6 +307,7 @@ class Agent:
         self.providers = []
         self.pending_patch = None
         self.waiting_for_confirmation = False
+        self.bot = None  # 用于定时任务发送消息
         
         # 配置 Gemini
         if os.getenv("GOOGLE_API_KEY"):
@@ -327,7 +345,11 @@ class Agent:
         self.current_provider = self.providers[0]
         print(f"🚀 默认使用: {self.current_provider}")
 
-    async def run(self, user_input: str, user_id: str) -> str:
+    def set_bot(self, bot):
+        """设置 Discord bot 实例，用于定时任务发送消息"""
+        self.bot = bot
+
+    async def run(self, user_input: str, user_id: str, channel=None) -> str:
         authorized = os.getenv("AUTHORIZED_USERS", "").split(",")
         if user_id not in authorized:
             return "❌ 你没有权限使用此机器人。"
@@ -349,7 +371,7 @@ class Agent:
             if provider == "gemini":
                 reply = await self._use_gemini(user_input)
             elif provider == "groq":
-                reply = await self._use_groq(user_input)
+                reply = await self._use_groq(user_input, channel)
             elif provider == "together":
                 reply = await self._use_together(user_input)
             else:
@@ -375,7 +397,7 @@ class Agent:
             print(f"Gemini 错误: {e}")
             return None
 
-    async def _use_groq(self, user_input: str) -> str:
+    async def _use_groq(self, user_input: str, channel=None) -> str:
         try:
             messages = []
             for msg in self.history:
@@ -400,9 +422,12 @@ class Agent:
                     
                     # 执行对应的函数
                     if func_name == "apply_code_patch":
-                        self.pending_patch = {"patch": args.get("patch_text"), "message": args.get("commit_message", "Self-modify")}
+                        patch_text = args.get("patch_text", "")
+                        commit_msg = args.get("commit_message", "Self-modify")
+                        self.pending_patch = {"patch": patch_text, "message": commit_msg}
                         self.waiting_for_confirmation = True
-                        return f"📝 补丁预览：\n```diff\n{args.get('patch_text')}\n```\n是否应用？回复 yes 或 no"
+                        return f"📝 补丁预览：\n```diff\n{patch_text}\n```\n是否应用？回复 yes 或 no"
+                    
                     elif func_name == "read_file":
                         result = read_file(args.get("filepath"))
                     elif func_name == "write_file":
@@ -421,6 +446,7 @@ class Agent:
                         result = get_time()
                     elif func_name == "set_reminder":
                         result = set_reminder(args.get("message"), args.get("seconds"))
+                        # 如果有 channel，可以在提醒时发送消息（简化版）
                     else:
                         result = f"未知函数: {func_name}"
                     
