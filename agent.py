@@ -3,36 +3,15 @@ import json
 import asyncio
 import requests
 from datetime import datetime
-from openai import OpenAI
 from groq import Groq
 from git_manager import GitManager
 from bs4 import BeautifulSoup
 
 # ========== 配置 ==========
-ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY")
-if ZHIPU_API_KEY:
-    zhipu_client = OpenAI(
-        api_key=ZHIPU_API_KEY,
-        base_url="https://open.bigmodel.cn/api/paas/v4/"
-    )
-    ZHIPU_MODEL = "glm-4.7-flash"
-    print("✅ 智谱 GLM-4.7-Flash 已配置")
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+MODEL_NAME = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-if GROQ_API_KEY:
-    groq_client = Groq(api_key=GROQ_API_KEY)
-    GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
-    print("✅ Groq 已配置")
-
-primary_client = None
-if ZHIPU_API_KEY:
-    primary_client = "zhipu"
-    print("🚀 主用模型: 智谱 GLM-4.7-Flash")
-elif GROQ_API_KEY:
-    primary_client = "groq"
-    print("🚀 主用模型: Groq")
-else:
-    raise Exception("❌ 没有可用的 API Key")
+print(f"🚀 使用模型: {MODEL_NAME}")
 
 # ========== 定时任务 ==========
 scheduled_tasks = {}
@@ -201,29 +180,20 @@ class Agent:
             return "✅ 已重置"
 
         try:
-            if primary_client == "zhipu":
-                return await self._call_zhipu_edit(user_input, channel)
-            else:
-                return await self._call_groq_edit(user_input, channel)
+            return await self._call_groq_edit(user_input, channel)
         except Exception as e:
-            if primary_client == "zhipu" and GROQ_API_KEY:
-                print(f"智谱失败: {e}，切换到 Groq")
-                return await self._call_groq_edit(user_input, channel)
-            elif primary_client == "groq" and ZHIPU_API_KEY:
-                print(f"Groq失败: {e}，切换到智谱")
-                return await self._call_zhipu_edit(user_input, channel)
             return f"❌ 错误：{e}"
 
-    async def _call_zhipu_edit(self, user_input, channel):
-        """智谱调用 - 消息编辑流式"""
+    async def _call_groq_edit(self, user_input, channel):
+        """Groq 调用 - 消息编辑流式"""
         messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
         for msg in self.history:
             messages.append({"role": msg["role"], "content": msg["parts"][0]})
         messages.append({"role": "user", "content": user_input})
 
-        # 先非流式检测是否需要工具调用
-        response = zhipu_client.chat.completions.create(
-            model=ZHIPU_MODEL,
+        # 先检测是否需要工具调用
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
             messages=messages,
             temperature=0.5,
             max_tokens=2048,
@@ -233,13 +203,13 @@ class Agent:
 
         reply = response.choices[0].message
 
-        # 工具调用，直接返回结果
+        # 工具调用，直接返回
         if reply.tool_calls:
             return await self._handle_tools(reply, user_input, channel)
 
-        # 无工具调用，流式输出并编辑消息
-        stream = zhipu_client.chat.completions.create(
-            model=ZHIPU_MODEL,
+        # 无工具调用，流式输出
+        stream = client.chat.completions.create(
+            model=MODEL_NAME,
             messages=messages,
             temperature=0.5,
             max_tokens=2048,
@@ -247,52 +217,6 @@ class Agent:
         )
 
         # 发送初始消息
-        msg = await channel.send("_思考中..._")
-        full_content = ""
-        
-        for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                full_content += content
-                # 每收到一点内容就更新消息
-                if len(full_content) <= 2000:
-                    await msg.edit(content=full_content)
-                else:
-                    # 内容太长，分段发送
-                    await msg.edit(content=full_content[:1997] + "...")
-
-        self._update_history(user_input, full_content)
-        return None  # 消息已通过编辑发送
-
-    async def _call_groq_edit(self, user_input, channel):
-        """Groq调用 - 消息编辑流式"""
-        messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
-        for msg in self.history:
-            messages.append({"role": msg["role"], "content": msg["parts"][0]})
-        messages.append({"role": "user", "content": user_input})
-
-        response = groq_client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=messages,
-            temperature=0.5,
-            max_tokens=2048,
-            tools=TOOLS,
-            tool_choice="auto"
-        )
-
-        reply = response.choices[0].message
-
-        if reply.tool_calls:
-            return await self._handle_tools(reply, user_input, channel)
-
-        stream = groq_client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=messages,
-            temperature=0.5,
-            max_tokens=2048,
-            stream=True
-        )
-
         msg = await channel.send("_思考中..._")
         full_content = ""
         
