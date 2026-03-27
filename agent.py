@@ -1,11 +1,18 @@
 import os
 import json
+import asyncio
+import requests
+from bs4 import BeautifulSoup
 from groq import Groq
 import google.generativeai as genai
 from together import Together
 from git_manager import GitManager
+from datetime import datetime, timedelta
+import threading
+import time
 
-# 定义工具函数（供 AI 调用）
+# ========== 工具函数定义 ==========
+
 def apply_code_patch(patch_text: str, commit_message: str = "Self-modify") -> str:
     """应用代码补丁并推送至 Git 仓库"""
     try:
@@ -18,54 +25,271 @@ def apply_code_patch(patch_text: str, commit_message: str = "Self-modify") -> st
     except Exception as e:
         return f"❌ 错误：{str(e)}"
 
-# 工具定义（统一格式）
-TOOL_DEFINITION = {
-    "type": "function",
-    "function": {
-        "name": "apply_code_patch",
-        "description": "应用代码补丁并推送至 Git 仓库，实现自我修改。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "patch_text": {
-                    "type": "string",
-                    "description": "统一 diff 格式的补丁内容"
+def read_file(filepath: str) -> str:
+    """读取文件内容"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+            if len(content) > 1900:
+                content = content[:1900] + "\n... (文件过长，已截断)"
+            return f"📄 文件 {filepath} 的内容：\n```\n{content}\n```"
+    except FileNotFoundError:
+        return f"❌ 文件不存在: {filepath}"
+    except Exception as e:
+        return f"❌ 读取失败: {str(e)}"
+
+def write_file(filepath: str, content: str) -> str:
+    """写入文件"""
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return f"✅ 文件已保存: {filepath}"
+    except Exception as e:
+        return f"❌ 保存失败: {str(e)}"
+
+def list_files(directory: str = ".") -> str:
+    """列出目录中的文件"""
+    try:
+        files = os.listdir(directory)
+        file_list = "\n".join(f"  - {f}" for f in files[:20])
+        return f"📁 {directory} 目录下的文件：\n{file_list}"
+    except Exception as e:
+        return f"❌ 列出失败: {str(e)}"
+
+def delete_file(filepath: str) -> str:
+    """删除文件"""
+    try:
+        os.remove(filepath)
+        return f"✅ 文件已删除: {filepath}"
+    except Exception as e:
+        return f"❌ 删除失败: {str(e)}"
+
+def search_web(query: str) -> str:
+    """联网搜索（使用 DuckDuckGo）"""
+    try:
+        url = f"https://html.duckduckgo.com/html/?q={query}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(url, headers=headers, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        results = []
+        for result in soup.find_all('a', class_='result__a')[:5]:
+            title = result.get_text()
+            link = result.get('href')
+            if link and link.startswith('/'):
+                link = 'https://duckduckgo.com' + link
+            results.append(f"🔗 {title}\n   {link}")
+        
+        if results:
+            return "🔍 搜索结果：\n\n" + "\n\n".join(results)
+        else:
+            return "❌ 没有找到相关结果"
+    except Exception as e:
+        return f"❌ 搜索失败: {str(e)}"
+
+def fetch_url(url: str) -> str:
+    """网络请求：获取网页内容"""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(url, headers=headers, timeout=10)
+        content = response.text[:1900]
+        return f"🌐 网页内容：\n```\n{content}\n```"
+    except Exception as e:
+        return f"❌ 请求失败: {str(e)}"
+
+def get_weather(city: str) -> str:
+    """获取天气"""
+    try:
+        url = f"https://wttr.in/{city}?format=%C+%t+%w"
+        response = requests.get(url, timeout=10)
+        weather = response.text.strip()
+        return f"🌤️ {city} 天气：{weather}"
+    except Exception as e:
+        return f"❌ 获取天气失败: {str(e)}"
+
+def get_time() -> str:
+    """获取当前时间"""
+    now = datetime.now()
+    return f"🕐 当前时间：{now.strftime('%Y年%m月%d日 %H:%M:%S')}"
+
+def set_reminder(message: str, seconds: int) -> str:
+    """设置提醒（定时任务）"""
+    def remind():
+        time.sleep(seconds)
+        # 这里需要发送到 Discord，暂时返回消息
+        print(f"⏰ 提醒：{message}")
+    
+    thread = threading.Thread(target=remind)
+    thread.daemon = True
+    thread.start()
+    return f"✅ 已设置 {seconds} 秒后的提醒：{message}"
+
+# ========== 工具定义 ==========
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "apply_code_patch",
+            "description": "应用代码补丁并推送至 Git 仓库，实现自我修改",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patch_text": {"type": "string", "description": "统一 diff 格式的补丁内容"},
+                    "commit_message": {"type": "string", "description": "提交信息"}
                 },
-                "commit_message": {
-                    "type": "string",
-                    "description": "提交信息，描述这次修改的内容"
+                "required": ["patch_text"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "读取文件内容",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filepath": {"type": "string", "description": "文件路径"}
+                },
+                "required": ["filepath"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "写入文件",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filepath": {"type": "string", "description": "文件路径"},
+                    "content": {"type": "string", "description": "文件内容"}
+                },
+                "required": ["filepath", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_files",
+            "description": "列出目录中的文件",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "目录路径，默认为当前目录"}
                 }
-            },
-            "required": ["patch_text"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_file",
+            "description": "删除文件",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filepath": {"type": "string", "description": "文件路径"}
+                },
+                "required": ["filepath"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_web",
+            "description": "联网搜索，获取最新信息",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "搜索关键词"}
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_url",
+            "description": "网络请求，获取网页内容",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "网页URL"}
+                },
+                "required": ["url"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "获取城市天气",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "城市名称"}
+                },
+                "required": ["city"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_time",
+            "description": "获取当前时间",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_reminder",
+            "description": "设置提醒（定时任务）",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string", "description": "提醒内容"},
+                    "seconds": {"type": "integer", "description": "多少秒后提醒"}
+                },
+                "required": ["message", "seconds"]
+            }
         }
     }
-}
+]
 
 SYSTEM_INSTRUCTION = """
-你是一个 Discord 机器人，可以管理自己的代码。你的能力：
+你是一个功能强大的 Discord 机器人，拥有以下能力：
 
-1. **普通对话**：回答用户问题，帮助用户。
-2. **自我修改代码**：当用户要求修改代码时，你需要：
-   - 分析用户需求
-   - 生成统一 diff 格式的补丁
-   - 向用户展示补丁内容，并询问确认
-   - 只有在用户明确回复 "yes"、"是"、"确认" 后，才能调用 apply_code_patch 工具
+1. **普通对话**：回答问题、帮助用户
+2. **自我修改代码**：修改自己的代码并推送
+3. **文件管理**：读取、写入、列出、删除文件
+4. **联网搜索**：搜索最新信息
+5. **网络请求**：获取网页内容
+6. **天气查询**：获取城市天气
+7. **时间查询**：获取当前时间
+8. **定时任务**：设置提醒
 
 **重要规则**：
-- 绝对不能在未经用户确认的情况下调用 apply_code_patch
-- 必须先展示补丁，等待用户确认
-- 如果用户没有确认，不要执行任何修改
+- 修改代码前必须先展示补丁，等待用户确认
+- 使用中文回复，友好、有帮助
 
-请用中文回复，保持友好、有帮助的语气。
+现在开始！
 """
 
 class Agent:
     def __init__(self):
         self.history = []
         self.providers = []
-        self.pending_patch = None  # 待确认的补丁
-        self.pending_message = None  # 待确认的消息
-        self.waiting_for_confirmation = False  # 是否等待确认
+        self.pending_patch = None
+        self.waiting_for_confirmation = False
         
         # 配置 Gemini
         if os.getenv("GOOGLE_API_KEY"):
@@ -98,22 +322,19 @@ class Agent:
                 print(f"⚠️ Together 配置失败: {e}")
         
         if not self.providers:
-            raise Exception("❌ 没有可用的 API！请设置至少一个 API Key")
+            raise Exception("❌ 没有可用的 API！")
         
         self.current_provider = self.providers[0]
         print(f"🚀 默认使用: {self.current_provider}")
 
     async def run(self, user_input: str, user_id: str) -> str:
-        # 权限检查
         authorized = os.getenv("AUTHORIZED_USERS", "").split(",")
         if user_id not in authorized:
             return "❌ 你没有权限使用此机器人。"
 
-        # 检查是否是确认消息
         if self.waiting_for_confirmation:
             if user_input.lower() in ["yes", "是", "确认", "同意", "y"]:
-                # 执行补丁
-                result = apply_code_patch(self.pending_patch["patch"], self.pending_patch["message"])
+                result = apply_code_patch(self.pending_patch["patch"], self.pending_patch.get("message", "Self-modify"))
                 self.waiting_for_confirmation = False
                 self.pending_patch = None
                 return result
@@ -124,7 +345,6 @@ class Agent:
             else:
                 return "请回复 yes 确认修改，或 no 取消。"
 
-        # 尝试所有 provider
         for provider in self.providers:
             if provider == "gemini":
                 reply = await self._use_gemini(user_input)
@@ -135,7 +355,6 @@ class Agent:
             else:
                 continue
             
-            # 如果成功返回
             if reply:
                 self.current_provider = provider
                 return reply
@@ -145,30 +364,22 @@ class Agent:
         return "❌ 所有 API 都失败了，请稍后再试。"
 
     async def _use_gemini(self, user_input: str) -> str:
-        """使用 Gemini API"""
         try:
-            model = genai.GenerativeModel(
-                self.gemini_model,
-                system_instruction=SYSTEM_INSTRUCTION
-            )
+            model = genai.GenerativeModel(self.gemini_model, system_instruction=SYSTEM_INSTRUCTION)
             chat = model.start_chat(history=self.history)
             response = chat.send_message(user_input)
             reply = response.text
-            
             self._update_history(user_input, reply)
             return reply
-            
         except Exception as e:
             print(f"Gemini 错误: {e}")
             return None
 
     async def _use_groq(self, user_input: str) -> str:
-        """使用 Groq API"""
         try:
             messages = []
             for msg in self.history:
                 messages.append({"role": msg["role"], "content": msg["parts"][0]})
-            
             messages.append({"role": "user", "content": user_input})
             
             response = self.groq_client.chat.completions.create(
@@ -176,27 +387,45 @@ class Agent:
                 messages=messages,
                 temperature=0.7,
                 max_tokens=8192,
-                tools=[TOOL_DEFINITION],
+                tools=TOOLS,
                 tool_choice="auto"
             )
             
             reply = response.choices[0].message
             
-            # 检查是否有工具调用
             if reply.tool_calls:
                 for tool_call in reply.tool_calls:
-                    if tool_call.function.name == "apply_code_patch":
-                        # 不直接执行，先保存待确认
-                        args = json.loads(tool_call.function.arguments)
-                        patch_text = args.get("patch_text", "")
-                        commit_msg = args.get("commit_message", "Self-modify")
-                        
-                        # 保存待确认的补丁
-                        self.pending_patch = {"patch": patch_text, "message": commit_msg}
+                    func_name = tool_call.function.name
+                    args = json.loads(tool_call.function.arguments)
+                    
+                    # 执行对应的函数
+                    if func_name == "apply_code_patch":
+                        self.pending_patch = {"patch": args.get("patch_text"), "message": args.get("commit_message", "Self-modify")}
                         self.waiting_for_confirmation = True
-                        
-                        # 返回补丁预览，请求确认
-                        return f"📝 检测到修改请求，补丁如下：\n```diff\n{patch_text}\n```\n\n是否应用这个修改？请回复 yes 或 no。"
+                        return f"📝 补丁预览：\n```diff\n{args.get('patch_text')}\n```\n是否应用？回复 yes 或 no"
+                    elif func_name == "read_file":
+                        result = read_file(args.get("filepath"))
+                    elif func_name == "write_file":
+                        result = write_file(args.get("filepath"), args.get("content"))
+                    elif func_name == "list_files":
+                        result = list_files(args.get("directory", "."))
+                    elif func_name == "delete_file":
+                        result = delete_file(args.get("filepath"))
+                    elif func_name == "search_web":
+                        result = search_web(args.get("query"))
+                    elif func_name == "fetch_url":
+                        result = fetch_url(args.get("url"))
+                    elif func_name == "get_weather":
+                        result = get_weather(args.get("city"))
+                    elif func_name == "get_time":
+                        result = get_time()
+                    elif func_name == "set_reminder":
+                        result = set_reminder(args.get("message"), args.get("seconds"))
+                    else:
+                        result = f"未知函数: {func_name}"
+                    
+                    self._update_history(user_input, result)
+                    return result
             
             reply_text = reply.content
             self._update_history(user_input, reply_text)
@@ -207,12 +436,10 @@ class Agent:
             return None
 
     async def _use_together(self, user_input: str) -> str:
-        """使用 Together API"""
         try:
             messages = []
             for msg in self.history:
                 messages.append({"role": msg["role"], "content": msg["parts"][0]})
-            
             messages.append({"role": "user", "content": user_input})
             
             response = self.together_client.chat.completions.create(
@@ -223,15 +450,6 @@ class Agent:
             )
             
             reply = response.choices[0].message.content
-            
-            # 检查是否包含补丁
-            if "--- a/" in reply and "+++ b/" in reply and "@@" in reply:
-                patch = self._extract_patch(reply)
-                if patch:
-                    self.pending_patch = {"patch": patch, "message": "Self-modify"}
-                    self.waiting_for_confirmation = True
-                    return reply + "\n\n是否应用这个修改？请回复 yes 或 no。"
-            
             self._update_history(user_input, reply)
             return reply
             
@@ -239,28 +457,6 @@ class Agent:
             print(f"Together 错误: {e}")
             return None
 
-    def _extract_patch(self, text: str) -> str:
-        """从回复中提取补丁内容"""
-        lines = text.split('\n')
-        patch_lines = []
-        in_patch = False
-        
-        for line in lines:
-            if line.startswith('--- a/') or line.startswith('+++ b/'):
-                in_patch = True
-                patch_lines.append(line)
-            elif in_patch and (line.startswith('@@') or line.startswith('+') or line.startswith('-') or line.startswith(' ')):
-                patch_lines.append(line)
-            elif in_patch and line.strip() == '':
-                continue
-            elif in_patch and not line.startswith(('@@', '+', '-', ' ')):
-                break
-        
-        if patch_lines:
-            return '\n'.join(patch_lines)
-        return None
-
     def _update_history(self, user_input: str, reply: str):
-        """更新对话历史"""
         self.history.append({"role": "user", "parts": [user_input]})
         self.history.append({"role": "assistant", "parts": [reply]})
