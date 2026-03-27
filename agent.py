@@ -202,26 +202,26 @@ class Agent:
 
         try:
             if primary_client == "zhipu":
-                return await self._call_zhipu(user_input, channel)
+                return await self._call_zhipu_edit(user_input, channel)
             else:
-                return await self._call_groq(user_input, channel)
+                return await self._call_groq_edit(user_input, channel)
         except Exception as e:
             if primary_client == "zhipu" and GROQ_API_KEY:
                 print(f"智谱失败: {e}，切换到 Groq")
-                return await self._call_groq(user_input, channel)
+                return await self._call_groq_edit(user_input, channel)
             elif primary_client == "groq" and ZHIPU_API_KEY:
                 print(f"Groq失败: {e}，切换到智谱")
-                return await self._call_zhipu(user_input, channel)
+                return await self._call_zhipu_edit(user_input, channel)
             return f"❌ 错误：{e}"
 
-    async def _call_zhipu(self, user_input, channel):
-        """智谱调用（流式）"""
+    async def _call_zhipu_edit(self, user_input, channel):
+        """智谱调用 - 消息编辑流式"""
         messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
         for msg in self.history:
             messages.append({"role": msg["role"], "content": msg["parts"][0]})
         messages.append({"role": "user", "content": user_input})
 
-        # 非流式，先检测是否需要工具调用
+        # 先非流式检测是否需要工具调用
         response = zhipu_client.chat.completions.create(
             model=ZHIPU_MODEL,
             messages=messages,
@@ -233,11 +233,11 @@ class Agent:
 
         reply = response.choices[0].message
 
-        # 如果有工具调用，走非流式处理
+        # 工具调用，直接返回结果
         if reply.tool_calls:
             return await self._handle_tools(reply, user_input, channel)
 
-        # 无工具调用，走流式输出
+        # 无工具调用，流式输出并编辑消息
         stream = zhipu_client.chat.completions.create(
             model=ZHIPU_MODEL,
             messages=messages,
@@ -246,25 +246,31 @@ class Agent:
             stream=True
         )
 
+        # 发送初始消息
+        msg = await channel.send("_思考中..._")
         full_content = ""
+        
         for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
                 content = chunk.choices[0].delta.content
                 full_content += content
-                if channel:
-                    await channel.send(content)
+                # 每收到一点内容就更新消息
+                if len(full_content) <= 2000:
+                    await msg.edit(content=full_content)
+                else:
+                    # 内容太长，分段发送
+                    await msg.edit(content=full_content[:1997] + "...")
 
         self._update_history(user_input, full_content)
-        return None  # 流式已发送
+        return None  # 消息已通过编辑发送
 
-    async def _call_groq(self, user_input, channel):
-        """Groq调用（流式）"""
+    async def _call_groq_edit(self, user_input, channel):
+        """Groq调用 - 消息编辑流式"""
         messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
         for msg in self.history:
             messages.append({"role": msg["role"], "content": msg["parts"][0]})
         messages.append({"role": "user", "content": user_input})
 
-        # 非流式，先检测是否需要工具调用
         response = groq_client.chat.completions.create(
             model=GROQ_MODEL,
             messages=messages,
@@ -279,7 +285,6 @@ class Agent:
         if reply.tool_calls:
             return await self._handle_tools(reply, user_input, channel)
 
-        # 流式输出
         stream = groq_client.chat.completions.create(
             model=GROQ_MODEL,
             messages=messages,
@@ -288,13 +293,17 @@ class Agent:
             stream=True
         )
 
+        msg = await channel.send("_思考中..._")
         full_content = ""
+        
         for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
                 content = chunk.choices[0].delta.content
                 full_content += content
-                if channel:
-                    await channel.send(content)
+                if len(full_content) <= 2000:
+                    await msg.edit(content=full_content)
+                else:
+                    await msg.edit(content=full_content[:1997] + "...")
 
         self._update_history(user_input, full_content)
         return None
