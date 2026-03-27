@@ -1,142 +1,36 @@
 import os
 import json
-import asyncio
-import requests
-from bs4 import BeautifulSoup
-from groq import Groq
+from cerebras.cloud.sdk import Cerebras
 import google.generativeai as genai
-from together import Together
+from groq import Groq
 from git_manager import GitManager
-from datetime import datetime, timedelta
-import threading
-import time
 
-# ========== 工具函数定义 ==========
-
+# ========== 工具函数 ==========
 def apply_code_patch(patch_text: str, commit_message: str = "Self-modify") -> str:
-    """应用代码补丁并推送至 Git 仓库"""
     try:
         gm = GitManager(repo_path=os.getcwd())
         success = gm.apply_patch(patch_text, commit_message)
         if success:
             return "✅ 代码已修改并推送，Railway 将自动重新部署（约1-2分钟）。"
-        else:
-            return "❌ 修改失败，请检查补丁格式。"
+        return "❌ 修改失败，请检查补丁格式。"
     except Exception as e:
         return f"❌ 错误：{str(e)}"
 
-def read_file(filepath: str) -> str:
-    """读取文件内容"""
-    try:
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
-            if len(content) > 1900:
-                content = content[:1900] + "\n... (文件过长，已截断)"
-            return f"📄 文件 {filepath} 的内容：\n```\n{content}\n```"
-    except FileNotFoundError:
-        return f"❌ 文件不存在: {filepath}"
-    except Exception as e:
-        return f"❌ 读取失败: {str(e)}"
-
-def write_file(filepath: str, content: str) -> str:
-    """写入文件"""
-    try:
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(content)
-        return f"✅ 文件已保存: {filepath}"
-    except Exception as e:
-        return f"❌ 保存失败: {str(e)}"
-
-def list_files(directory: str = ".") -> str:
-    """列出目录中的文件"""
-    try:
-        files = os.listdir(directory)
-        file_list = "\n".join(f"  - {f}" for f in files[:20])
-        return f"📁 {directory} 目录下的文件：\n{file_list}"
-    except Exception as e:
-        return f"❌ 列出失败: {str(e)}"
-
-def delete_file(filepath: str) -> str:
-    """删除文件"""
-    try:
-        os.remove(filepath)
-        return f"✅ 文件已删除: {filepath}"
-    except Exception as e:
-        return f"❌ 删除失败: {str(e)}"
-
-def search_web(query: str) -> str:
-    """联网搜索（使用 DuckDuckGo）"""
-    try:
-        url = f"https://html.duckduckgo.com/html/?q={query}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        results = []
-        for result in soup.find_all('a', class_='result__a')[:5]:
-            title = result.get_text()
-            link = result.get('href')
-            if link and link.startswith('/'):
-                link = 'https://duckduckgo.com' + link
-            results.append(f"🔗 {title}\n   {link}")
-        
-        if results:
-            return "🔍 搜索结果：\n\n" + "\n\n".join(results)
-        else:
-            return "❌ 没有找到相关结果"
-    except Exception as e:
-        return f"❌ 搜索失败: {str(e)}"
-
-def fetch_url(url: str) -> str:
-    """网络请求：获取网页内容"""
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        response = requests.get(url, headers=headers, timeout=10)
-        content = response.text[:1900]
-        return f"🌐 网页内容：\n```\n{content}\n```"
-    except Exception as e:
-        return f"❌ 请求失败: {str(e)}"
-
-def get_weather(city: str) -> str:
-    """获取天气"""
-    try:
-        url = f"https://wttr.in/{city}?format=%C+%t+%w"
-        response = requests.get(url, timeout=10)
-        weather = response.text.strip()
-        return f"🌤️ {city} 天气：{weather}"
-    except Exception as e:
-        return f"❌ 获取天气失败: {str(e)}"
-
 def get_time() -> str:
-    """获取当前时间"""
-    now = datetime.now()
-    return f"🕐 当前时间：{now.strftime('%Y年%m月%d日 %H:%M:%S')}"
-
-def set_reminder(message: str, seconds: int) -> str:
-    """设置提醒（定时任务）"""
-    def remind():
-        time.sleep(seconds)
-        print(f"⏰ 提醒：{message}")
-        # 注意：这里需要在 Discord 发送消息，但当前无法直接访问 bot
-        # 可以在 run 方法中处理
-    
-    thread = threading.Thread(target=remind)
-    thread.daemon = True
-    thread.start()
-    return f"✅ 已设置 {seconds} 秒后的提醒：{message}"
+    from datetime import datetime
+    return f"🕐 当前时间：{datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}"
 
 # ========== 工具定义 ==========
-
 TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "apply_code_patch",
-            "description": "应用代码补丁并推送至 Git 仓库，实现自我修改",
+            "description": "应用代码补丁并推送至 Git 仓库",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "patch_text": {"type": "string", "description": "统一 diff 格式的补丁内容"},
+                    "patch_text": {"type": "string", "description": "diff 格式的补丁内容"},
                     "commit_message": {"type": "string", "description": "提交信息"}
                 },
                 "required": ["patch_text"]
@@ -146,214 +40,88 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "read_file",
-            "description": "读取文件内容",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filepath": {"type": "string", "description": "文件路径"}
-                },
-                "required": ["filepath"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_file",
-            "description": "写入文件",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filepath": {"type": "string", "description": "文件路径"},
-                    "content": {"type": "string", "description": "文件内容"}
-                },
-                "required": ["filepath", "content"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_files",
-            "description": "列出目录中的文件",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "directory": {"type": "string", "description": "目录路径，默认为当前目录"}
-                }
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_file",
-            "description": "删除文件",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "filepath": {"type": "string", "description": "文件路径"}
-                },
-                "required": ["filepath"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_web",
-            "description": "联网搜索，获取最新信息",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "搜索关键词"}
-                },
-                "required": ["query"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "fetch_url",
-            "description": "网络请求，获取网页内容",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "网页URL"}
-                },
-                "required": ["url"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_weather",
-            "description": "获取城市天气",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "city": {"type": "string", "description": "城市名称"}
-                },
-                "required": ["city"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "get_time",
-            "description": "获取当前时间",
+            "description": "获取当前时间。只有当用户明确询问时间时才调用。",
             "parameters": {"type": "object", "properties": {}}
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "set_reminder",
-            "description": "设置提醒（定时任务）",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "message": {"type": "string", "description": "提醒内容"},
-                    "seconds": {"type": "integer", "description": "多少秒后提醒"}
-                },
-                "required": ["message", "seconds"]
-            }
         }
     }
 ]
 
 SYSTEM_INSTRUCTION = """
-你是 Discord 机器人，可以修改自己的代码。
+你是 Discord 机器人。你的职责：
 
-**严格规则**：
-1. 当用户说"把命令前缀改成 X"时，你必须：
-   - 生成正确的 diff 补丁
-   - 调用 apply_code_patch 工具
-   - 绝对不能只用文字回复说"改好了"
+1. **聊天**：正常对话，友好回复。用户说"你好"时，问候即可，不要调用任何工具。
+2. **查询时间**：只有用户明确说"现在几点"、"时间"、"几点了"时，才调用 get_time。
+3. **修改代码**：只有用户明确说"改代码"、"修改"、"把XX改成XX"时，才调用 apply_code_patch。
 
-2. 补丁格式示例：
---- a/bot.py
-+++ b/bot.py
-@@ -12,7 +12,7 @@
--bot = commands.Bot(command_prefix="!")
-+bot = commands.Bot(command_prefix="$")
-
-3. 关于斜杠命令（/命令）：Discord 的 / 命令需要在 Discord Developer Portal 手动配置，无法通过修改代码实现。如果用户问，请解释这一点。
-
-4. 你有以下工具可用：
-   - apply_code_patch: 修改代码
-   - read_file: 读取文件
-   - write_file: 写入文件
-   - list_files: 列出文件
-   - delete_file: 删除文件
-   - search_web: 联网搜索
-   - fetch_url: 获取网页内容
-   - get_weather: 查询天气
-   - get_time: 获取时间
-   - set_reminder: 设置提醒
-
-5. 使用中文回复，友好、有帮助。
+**重要**：
+- 不要主动调用任何工具
+- 不要猜测用户意图
+- 保持对话自然
 
 现在开始！
 """
 
+# ========== Agent 类 ==========
 class Agent:
     def __init__(self):
         self.history = []
-        self.providers = []
         self.pending_patch = None
         self.waiting_for_confirmation = False
-        self.bot = None  # 用于定时任务发送消息
         
-        # 配置 Gemini
+        # 初始化各个 API
+        self.cerebras_client = None
+        self.gemini_client = None
+        self.groq_client = None
+        
+        # Cerebras（最聪明，首选）
+        if os.getenv("CEREBRAS_API_KEY"):
+            try:
+                self.cerebras_client = Cerebras(api_key=os.getenv("CEREBRAS_API_KEY"))
+                self.cerebras_model = "llama-3.3-70b"
+                print("✅ Cerebras 已配置")
+            except Exception as e:
+                print(f"⚠️ Cerebras 配置失败: {e}")
+        
+        # Gemini（次选）
         if os.getenv("GOOGLE_API_KEY"):
             try:
                 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
                 self.gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-                self.providers.append("gemini")
                 print("✅ Gemini 已配置")
             except Exception as e:
                 print(f"⚠️ Gemini 配置失败: {e}")
         
-        # 配置 Groq
+        # Groq（保底）
         if os.getenv("GROQ_API_KEY"):
             try:
+                from groq import Groq
                 self.groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-                self.groq_model = "llama-3.3-70b-versatile"
-                self.providers.append("groq")
+                self.groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
                 print("✅ Groq 已配置")
             except Exception as e:
                 print(f"⚠️ Groq 配置失败: {e}")
         
-        # 配置 Together
-        if os.getenv("TOGETHER_API_KEY"):
-            try:
-                self.together_client = Together(api_key=os.getenv("TOGETHER_API_KEY"))
-                self.together_model = "meta-llama/Llama-3.3-70B-Instruct-Turbo"
-                self.providers.append("together")
-                print("✅ Together 已配置")
-            except Exception as e:
-                print(f"⚠️ Together 配置失败: {e}")
+        # 按智商排序的调用顺序
+        self.providers = []
+        if self.cerebras_client:
+            self.providers.append("cerebras")
+        if self.gemini_client:
+            self.providers.append("gemini")
+        if self.groq_client:
+            self.providers.append("groq")
         
         if not self.providers:
             raise Exception("❌ 没有可用的 API！")
         
-        self.current_provider = self.providers[0]
-        print(f"🚀 默认使用: {self.current_provider}")
-
-    def set_bot(self, bot):
-        """设置 Discord bot 实例，用于定时任务发送消息"""
-        self.bot = bot
+        print(f"🚀 API 调用顺序: {' → '.join(self.providers)}")
 
     async def run(self, user_input: str, user_id: str, channel=None) -> str:
         authorized = os.getenv("AUTHORIZED_USERS", "").split(",")
         if user_id not in authorized:
             return "❌ 你没有权限使用此机器人。"
 
+        # 处理确认
         if self.waiting_for_confirmation:
             if user_input.lower() in ["yes", "是", "确认", "同意", "y"]:
                 result = apply_code_patch(self.pending_patch["patch"], self.pending_patch.get("message", "Self-modify"))
@@ -367,43 +135,111 @@ class Agent:
             else:
                 return "请回复 yes 确认修改，或 no 取消。"
 
+        # 重置命令
+        if user_input.strip() in ["!reset", "重置", "清除历史"]:
+            self.history = []
+            self.waiting_for_confirmation = False
+            self.pending_patch = None
+            return "✅ 对话已重置，历史已清空"
+
+        # 按顺序尝试各个 API
         for provider in self.providers:
-            if provider == "gemini":
-                reply = await self._use_gemini(user_input)
-            elif provider == "groq":
-                reply = await self._use_groq(user_input, channel)
-            elif provider == "together":
-                reply = await self._use_together(user_input)
-            else:
+            try:
+                if provider == "cerebras":
+                    result = await self._use_cerebras(user_input)
+                elif provider == "gemini":
+                    result = await self._use_gemini(user_input)
+                elif provider == "groq":
+                    result = await self._use_groq(user_input)
+                else:
+                    continue
+                
+                if result:
+                    return result
+                    
+            except Exception as e:
+                print(f"⚠️ {provider} 失败: {e}")
                 continue
-            
-            if reply:
-                self.current_provider = provider
-                return reply
-            
-            print(f"⚠️ {provider} 失败，尝试下一个...")
         
         return "❌ 所有 API 都失败了，请稍后再试。"
 
-    async def _use_gemini(self, user_input: str) -> str:
+    async def _use_cerebras(self, user_input: str) -> str:
+        """使用 Cerebras API"""
         try:
-            model = genai.GenerativeModel(self.gemini_model, system_instruction=SYSTEM_INSTRUCTION)
-            chat = model.start_chat(history=self.history)
-            response = chat.send_message(user_input)
-            reply = response.text
-            self._update_history(user_input, reply)
-            return reply
-        except Exception as e:
-            print(f"Gemini 错误: {e}")
-            return None
-
-    async def _use_groq(self, user_input: str, channel=None) -> str:
-        try:
-            messages = []
+            messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
             for msg in self.history:
                 messages.append({"role": msg["role"], "content": msg["parts"][0]})
             messages.append({"role": "user", "content": user_input})
+
+            response = self.cerebras_client.chat.completions.create(
+                model=self.cerebras_model,
+                messages=messages,
+                temperature=0.7,
+                max_tokens=8192,
+                tools=TOOLS,
+                tool_choice="auto"
+            )
+
+            reply = response.choices[0].message
             
+            if reply.tool_calls:
+                for tool_call in reply.tool_calls:
+                    func_name = tool_call.function.name
+                    args = json.loads(tool_call.function.arguments)
+                    
+                    if func_name == "apply_code_patch":
+                        self.pending_patch = {"patch": args.get("patch_text"), "message": args.get("commit_message", "Self-modify")}
+                        self.waiting_for_confirmation = True
+                        return f"📝 补丁预览：\n```diff\n{args.get('patch_text')}\n```\n是否应用？回复 yes 或 no"
+                    
+                    elif func_name == "get_time":
+                        result = get_time()
+                        self._update_history(user_input, result)
+                        return result
+            
+            reply_text = reply.content
+            self._update_history(user_input, reply_text)
+            return reply_text
+            
+        except Exception as e:
+            print(f"Cerebras 错误: {e}")
+            raise
+
+    async def _use_gemini(self, user_input: str) -> str:
+        """使用 Gemini API"""
+        try:
+            model = genai.GenerativeModel(
+                self.gemini_model,
+                system_instruction=SYSTEM_INSTRUCTION
+            )
+            chat = model.start_chat(history=self.history)
+            response = chat.send_message(user_input)
+            reply = response.text
+            
+            # 简单检测补丁
+            if "--- a/" in reply and "+++ b/" in reply:
+                import re
+                patch_match = re.search(r'(--- a/.*?\n\+\+\+ b/.*?\n@@.*?\n(?:[+- ].*?\n)+)', reply, re.DOTALL)
+                if patch_match:
+                    self.pending_patch = {"patch": patch_match.group(1), "message": "Self-modify"}
+                    self.waiting_for_confirmation = True
+                    return reply + "\n\n是否应用？回复 yes 或 no"
+            
+            self._update_history(user_input, reply)
+            return reply
+            
+        except Exception as e:
+            print(f"Gemini 错误: {e}")
+            raise
+
+    async def _use_groq(self, user_input: str) -> str:
+        """使用 Groq API"""
+        try:
+            messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
+            for msg in self.history:
+                messages.append({"role": msg["role"], "content": msg["parts"][0]})
+            messages.append({"role": "user", "content": user_input})
+
             response = self.groq_client.chat.completions.create(
                 model=self.groq_model,
                 messages=messages,
@@ -412,7 +248,7 @@ class Agent:
                 tools=TOOLS,
                 tool_choice="auto"
             )
-            
+
             reply = response.choices[0].message
             
             if reply.tool_calls:
@@ -420,38 +256,15 @@ class Agent:
                     func_name = tool_call.function.name
                     args = json.loads(tool_call.function.arguments)
                     
-                    # 执行对应的函数
                     if func_name == "apply_code_patch":
-                        patch_text = args.get("patch_text", "")
-                        commit_msg = args.get("commit_message", "Self-modify")
-                        self.pending_patch = {"patch": patch_text, "message": commit_msg}
+                        self.pending_patch = {"patch": args.get("patch_text"), "message": args.get("commit_message", "Self-modify")}
                         self.waiting_for_confirmation = True
-                        return f"📝 补丁预览：\n```diff\n{patch_text}\n```\n是否应用？回复 yes 或 no"
+                        return f"📝 补丁预览：\n```diff\n{args.get('patch_text')}\n```\n是否应用？回复 yes 或 no"
                     
-                    elif func_name == "read_file":
-                        result = read_file(args.get("filepath"))
-                    elif func_name == "write_file":
-                        result = write_file(args.get("filepath"), args.get("content"))
-                    elif func_name == "list_files":
-                        result = list_files(args.get("directory", "."))
-                    elif func_name == "delete_file":
-                        result = delete_file(args.get("filepath"))
-                    elif func_name == "search_web":
-                        result = search_web(args.get("query"))
-                    elif func_name == "fetch_url":
-                        result = fetch_url(args.get("url"))
-                    elif func_name == "get_weather":
-                        result = get_weather(args.get("city"))
                     elif func_name == "get_time":
                         result = get_time()
-                    elif func_name == "set_reminder":
-                        result = set_reminder(args.get("message"), args.get("seconds"))
-                        # 如果有 channel，可以在提醒时发送消息（简化版）
-                    else:
-                        result = f"未知函数: {func_name}"
-                    
-                    self._update_history(user_input, result)
-                    return result
+                        self._update_history(user_input, result)
+                        return result
             
             reply_text = reply.content
             self._update_history(user_input, reply_text)
@@ -459,29 +272,7 @@ class Agent:
             
         except Exception as e:
             print(f"Groq 错误: {e}")
-            return None
-
-    async def _use_together(self, user_input: str) -> str:
-        try:
-            messages = []
-            for msg in self.history:
-                messages.append({"role": msg["role"], "content": msg["parts"][0]})
-            messages.append({"role": "user", "content": user_input})
-            
-            response = self.together_client.chat.completions.create(
-                model=self.together_model,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=8192
-            )
-            
-            reply = response.choices[0].message.content
-            self._update_history(user_input, reply)
-            return reply
-            
-        except Exception as e:
-            print(f"Together 错误: {e}")
-            return None
+            raise
 
     def _update_history(self, user_input: str, reply: str):
         self.history.append({"role": "user", "parts": [user_input]})
