@@ -29,7 +29,7 @@ TOOL_DEFINITION = {
             "properties": {
                 "patch_text": {
                     "type": "string",
-                    "description": "统一 diff 格式的补丁内容。例如：--- a/bot.py\\n+++ b/bot.py\\n@@ -5,7 +5,7 @@\\n-bot = commands.Bot(command_prefix='!')\\n+bot = commands.Bot(command_prefix='$')"
+                    "description": "统一 diff 格式的补丁内容"
                 },
                 "commit_message": {
                     "type": "string",
@@ -46,22 +46,15 @@ SYSTEM_INSTRUCTION = """
 
 1. **普通对话**：回答用户问题，帮助用户。
 2. **自我修改代码**：当用户要求修改代码时，你需要：
-   - 分析用户需求（例如改配置、新增功能、修复bug）
+   - 分析用户需求
    - 生成统一 diff 格式的补丁
-   - 调用 apply_code_patch 工具来应用补丁
+   - 向用户展示补丁内容，并询问确认
+   - 只有在用户明确回复 "yes"、"是"、"确认" 后，才能调用 apply_code_patch 工具
 
 **重要规则**：
-- 在调用 apply_code_patch 之前，必须先向用户展示补丁内容，并询问确认
-- 只有在用户明确回复 "yes"、"是"、"确认"、"同意" 等确认词后，才能调用工具
-- 如果用户拒绝或没有确认，不要调用工具
-- 如果用户只是普通对话，正常回复即可
-
-**补丁格式示例**：
---- a/bot.py
-+++ b/bot.py
-@@ -5,7 +5,7 @@
--bot = commands.Bot(command_prefix='!')
-+bot = commands.Bot(command_prefix='$')
+- 绝对不能在未经用户确认的情况下调用 apply_code_patch
+- 必须先展示补丁，等待用户确认
+- 如果用户没有确认，不要执行任何修改
 
 请用中文回复，保持友好、有帮助的语气。
 """
@@ -72,6 +65,7 @@ class Agent:
         self.providers = []
         self.pending_patch = None  # 待确认的补丁
         self.pending_message = None  # 待确认的消息
+        self.waiting_for_confirmation = False  # 是否等待确认
         
         # 配置 Gemini
         if os.getenv("GOOGLE_API_KEY"):
@@ -116,17 +110,19 @@ class Agent:
             return "❌ 你没有权限使用此机器人。"
 
         # 检查是否是确认消息
-        if self.pending_patch and user_input.lower() in ["yes", "是", "确认", "同意", "y"]:
-            # 执行补丁
-            result = apply_code_patch(self.pending_patch["patch"], self.pending_patch["message"])
-            self.pending_patch = None
-            self.pending_message = None
-            return result
-        
-        if self.pending_patch and user_input.lower() in ["no", "不", "取消", "n"]:
-            self.pending_patch = None
-            self.pending_message = None
-            return "❌ 已取消修改。"
+        if self.waiting_for_confirmation:
+            if user_input.lower() in ["yes", "是", "确认", "同意", "y"]:
+                # 执行补丁
+                result = apply_code_patch(self.pending_patch["patch"], self.pending_patch["message"])
+                self.waiting_for_confirmation = False
+                self.pending_patch = None
+                return result
+            elif user_input.lower() in ["no", "不", "取消", "n"]:
+                self.waiting_for_confirmation = False
+                self.pending_patch = None
+                return "❌ 已取消修改。"
+            else:
+                return "请回复 yes 确认修改，或 no 取消。"
 
         # 尝试所有 provider
         for provider in self.providers:
@@ -159,15 +155,6 @@ class Agent:
             response = chat.send_message(user_input)
             reply = response.text
             
-            # 检查是否包含补丁（简单检测）
-            if "--- a/" in reply and "+++ b/" in reply and "@@" in reply:
-                # 提取补丁
-                patch = self._extract_patch(reply)
-                if patch:
-                    self.pending_patch = {"patch": patch, "message": "Self-modify"}
-                    self.pending_message = reply
-                    return reply + "\n\n是否应用这个修改？请回复 yes 或 no。"
-            
             self._update_history(user_input, reply)
             return reply
             
@@ -199,9 +186,17 @@ class Agent:
             if reply.tool_calls:
                 for tool_call in reply.tool_calls:
                     if tool_call.function.name == "apply_code_patch":
+                        # 不直接执行，先保存待确认
                         args = json.loads(tool_call.function.arguments)
-                        result = apply_code_patch(**args)
-                        return result
+                        patch_text = args.get("patch_text", "")
+                        commit_msg = args.get("commit_message", "Self-modify")
+                        
+                        # 保存待确认的补丁
+                        self.pending_patch = {"patch": patch_text, "message": commit_msg}
+                        self.waiting_for_confirmation = True
+                        
+                        # 返回补丁预览，请求确认
+                        return f"📝 检测到修改请求，补丁如下：\n```diff\n{patch_text}\n```\n\n是否应用这个修改？请回复 yes 或 no。"
             
             reply_text = reply.content
             self._update_history(user_input, reply_text)
@@ -234,6 +229,7 @@ class Agent:
                 patch = self._extract_patch(reply)
                 if patch:
                     self.pending_patch = {"patch": patch, "message": "Self-modify"}
+                    self.waiting_for_confirmation = True
                     return reply + "\n\n是否应用这个修改？请回复 yes 或 no。"
             
             self._update_history(user_input, reply)
