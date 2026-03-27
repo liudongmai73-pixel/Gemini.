@@ -1,4 +1,6 @@
 discord.py
 python-dotenv
-google-genai
+google-generativeai
+groq
+together
 gitpython
