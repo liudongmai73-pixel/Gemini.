@@ -10,6 +10,7 @@ TOKEN = os.getenv("DISCORD_TOKEN")
 
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all(), help_command=None)
 user_agents = {}
+user_channels = {}  # 存储用户指定的频道
 
 def get_agent(user_id: str) -> Agent:
     if user_id not in user_agents:
@@ -37,26 +38,79 @@ async def on_message(message):
     
     await bot.process_commands(message)
     
-    if not isinstance(message.channel, discord.DMChannel) and bot.user not in message.mentions:
-        return
+    user_id = str(message.author.id)
+    channel_id = str(message.channel.id)
     
+    is_mentioned = bot.user in message.mentions
+    
+    # 检查频道设置
+    if user_id in user_channels:
+        target_channel = user_channels[user_id]
+        if channel_id != target_channel and not is_mentioned:
+            return
+    
+    should_respond = False
     content = message.content
-    for mention in message.mentions:
-        content = content.replace(f"<@{mention.id}>", "").replace(f"<@!{mention.id}>", "").strip()
     
-    if not content:
+    # 处理 @ 提及
+    if is_mentioned:
+        for mention in message.mentions:
+            content = content.replace(f"<@{mention.id}>", "").replace(f"<@!{mention.id}>", "").strip()
+        should_respond = True
+    
+    # 处理命令
+    if message.content.startswith("!"):
         return
     
-    async with message.channel.typing():
-        try:
-            agent = get_agent(str(message.author.id))
-            result = await agent.run(content, message.channel)
-            if result:
-                for chunk in [result[i:i+2000] for i in range(0, len(result), 2000)]:
-                    await message.channel.send(chunk)
-        except Exception as e:
-            print(f"错误: {e}")
-            await message.channel.send(f"❌ 出错了：{str(e)[:200]}")
+    # 普通消息
+    if not message.content.startswith("!") and not is_mentioned:
+        if user_id in user_channels:
+            if channel_id == user_channels[user_id]:
+                should_respond = True
+        else:
+            should_respond = True
+    
+    if should_respond and content:
+        async with message.channel.typing():
+            try:
+                agent = get_agent(user_id)
+                result = await agent.run(content, message.channel)
+                if result:
+                    for chunk in [result[i:i+2000] for i in range(0, len(result), 2000)]:
+                        await message.channel.send(chunk)
+            except Exception as e:
+                print(f"错误: {e}")
+                await message.channel.send(f"❌ 出错了：{str(e)[:200]}")
+
+# ========== 斜杠命令 ==========
+
+@bot.tree.command(name="chat", description="在当前位置开始对话")
+async def slash_chat(interaction: discord.Interaction):
+    """在当前频道启用对话"""
+    user_id = str(interaction.user.id)
+    channel_id = str(interaction.channel_id)
+    
+    if user_id in user_channels:
+        del user_channels[user_id]
+    
+    await interaction.response.send_message(
+        f"✅ 已在此频道启用对话。直接发消息我就会回复你（会 @ 你哦）。",
+        ephemeral=True
+    )
+
+@bot.tree.command(name="set", description="设置对话频道")
+@app_commands.describe(channel="要设置的频道")
+async def slash_set(interaction: discord.Interaction, channel: discord.TextChannel):
+    """设置指定频道为对话频道"""
+    user_id = str(interaction.user.id)
+    channel_id = str(channel.id)
+    
+    user_channels[user_id] = channel_id
+    
+    await interaction.response.send_message(
+        f"✅ 已将对话频道设置为 {channel.mention}\n以后我只会在这个频道回复你（会 @ 你哦）。",
+        ephemeral=True
+    )
 
 @bot.tree.command(name="model", description="切换AI模型")
 @app_commands.describe(model="gpt / kimi / deepseek / qwen")
@@ -80,6 +134,8 @@ async def slash_help(interaction: discord.Interaction):
     help_text = """
 **🤖 斜杠命令**
 
+`/chat` - 在当前频道启用对话
+`/set channel` - 设置指定频道为对话频道
 `/model gpt/kimi/deepseek/qwen` - 切换AI模型
 `/reset` - 重置对话历史
 `/help` - 显示此帮助
