@@ -17,6 +17,7 @@ class GitManager:
             subprocess.run(["git", "config", "user.email", "agent@discord.local"], cwd=self.repo_path)
     
     def apply_patch(self, patch_text, commit_message="Self-modify"):
+        patch_file = None
         try:
             with tempfile.NamedTemporaryFile(mode="w", suffix=".diff", delete=False) as f:
                 f.write(patch_text)
@@ -26,11 +27,10 @@ class GitManager:
             subprocess.run(["git", "add", "."], cwd=self.repo_path, check=True)
             subprocess.run(["git", "commit", "-m", commit_message], cwd=self.repo_path, check=True)
             subprocess.run(["git", "push", "origin", "main"], cwd=self.repo_path, check=True)
-            
             return True
         except subprocess.CalledProcessError as e:
             print(f"Git error: {e}")
             return False
         finally:
-            if os.path.exists(patch_file):
+            if patch_file and os.path.exists(patch_file):
                 os.unlink(patch_file)
