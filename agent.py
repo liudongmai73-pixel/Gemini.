@@ -8,7 +8,7 @@ from git_manager import GitManager
 from bs4 import BeautifulSoup
 from db import init_db, save_history, load_history, save_model_preference, load_model_preference
 
-# ========== 初始化数据库 ==========
+# 初始化数据库
 init_db()
 
 # ========== 配置 ==========
@@ -18,20 +18,20 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 AVAILABLE_MODELS = {
     "gpt": {
         "name": "openai/gpt-oss-120b",
-        "description": "智商最高，速度最快"
+        "description": "🧠 智商最高，速度最快"
     },
     "kimi": {
         "name": "moonshotai/kimi-k2-instruct",
-        "description": "中文最好，自然度最高"
+        "description": "🇨🇳 中文最好，表达自然"
     },
     "scout": {
         "name": "meta-llama/llama-4-scout-17b-16e-instruct",
-        "description": "速度极快，智商够用"
+        "description": "⚡ 速度极快，智商够用"
     }
 }
 DEFAULT_MODEL = "openai/gpt-oss-120b"
 
-print(f"🚀 默认模型: {DEFAULT_MODEL}")
+print(f"🚀 默认模型: GPT-OSS 120B")
 
 # ========== 定时任务 ==========
 scheduled_tasks = {}
@@ -194,11 +194,11 @@ class Agent:
         """切换模型"""
         if model_key not in AVAILABLE_MODELS:
             keys = ", ".join(AVAILABLE_MODELS.keys())
-            return f"❌ 可用模型: {keys}"
+            return f"❌ 可用模型: {keys}\n当前: {self.get_current_model()}"
         
         self.current_model = AVAILABLE_MODELS[model_key]["name"]
         save_model_preference(self.user_id, model_key)
-        return f"✅ 已切换到 {model_key} 模型\n{A VAILABLE_MODELS[model_key]['description']}"
+        return f"✅ 已切换到 **{model_key}** 模型\n{AVAILABLE_MODELS[model_key]['description']}"
 
     def get_current_model(self) -> str:
         """获取当前模型名"""
@@ -207,7 +207,7 @@ class Agent:
                 return key
         return "unknown"
 
-    async def run(self, user_input, channel=None):
+    async def run(self, user_input, user_name, channel=None):
         # 确认处理
         if self.waiting_for_confirmation:
             if user_input.lower() in ["yes", "是", "确认", "y"]:
@@ -234,7 +234,7 @@ class Agent:
             if len(parts) == 2:
                 return self.switch_model(parts[1])
             keys = ", ".join(AVAILABLE_MODELS.keys())
-            return f"用法: /model <模型>\n可用模型: {keys}\n当前: {self.get_current_model()}"
+            return f"用法: `/model <模型>`\n可用模型: {keys}\n当前: {self.get_current_model()}"
 
         try:
             messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
