@@ -6,12 +6,32 @@ from datetime import datetime
 from groq import Groq
 from git_manager import GitManager
 from bs4 import BeautifulSoup
+from db import init_db, save_history, load_history, save_model_preference, load_model_preference
+
+# ========== 初始化数据库 ==========
+init_db()
 
 # ========== 配置 ==========
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-MODEL_NAME = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
-print(f"🚀 使用模型: {MODEL_NAME}")
+# 可用模型
+AVAILABLE_MODELS = {
+    "gpt": {
+        "name": "openai/gpt-oss-120b",
+        "description": "智商最高，速度最快"
+    },
+    "kimi": {
+        "name": "moonshotai/kimi-k2-instruct",
+        "description": "中文最好，自然度最高"
+    },
+    "scout": {
+        "name": "meta-llama/llama-4-scout-17b-16e-instruct",
+        "description": "速度极快，智商够用"
+    }
+}
+DEFAULT_MODEL = "openai/gpt-oss-120b"
+
+print(f"🚀 默认模型: {DEFAULT_MODEL}")
 
 # ========== 定时任务 ==========
 scheduled_tasks = {}
@@ -152,26 +172,52 @@ SYSTEM_INSTRUCTION = """你是 Discord 机器人。
 - 用中文回复"""
 
 class Agent:
-    def __init__(self):
-        self.history = []
+    def __init__(self, user_id: str):
+        self.user_id = user_id
+        self.history = load_history(user_id)
         self.pending_patch = None
         self.waiting_for_confirmation = False
         self.bot = None
+        
+        # 加载用户偏好的模型
+        preferred = load_model_preference(user_id)
+        if preferred and preferred in AVAILABLE_MODELS:
+            self.current_model = AVAILABLE_MODELS[preferred]["name"]
+            print(f"用户 {user_id} 使用模型: {preferred}")
+        else:
+            self.current_model = DEFAULT_MODEL
 
     def set_bot(self, bot):
         self.bot = bot
 
-    async def run(self, user_input, user_id, channel=None):
-        if user_id not in os.getenv("AUTHORIZED_USERS", "").split(","):
-            return "❌ 无权限"
+    def switch_model(self, model_key: str) -> str:
+        """切换模型"""
+        if model_key not in AVAILABLE_MODELS:
+            keys = ", ".join(AVAILABLE_MODELS.keys())
+            return f"❌ 可用模型: {keys}"
+        
+        self.current_model = AVAILABLE_MODELS[model_key]["name"]
+        save_model_preference(self.user_id, model_key)
+        return f"✅ 已切换到 {model_key} 模型\n{A VAILABLE_MODELS[model_key]['description']}"
 
+    def get_current_model(self) -> str:
+        """获取当前模型名"""
+        for key, val in AVAILABLE_MODELS.items():
+            if val["name"] == self.current_model:
+                return key
+        return "unknown"
+
+    async def run(self, user_input, channel=None):
         # 确认处理
         if self.waiting_for_confirmation:
             if user_input.lower() in ["yes", "是", "确认", "y"]:
                 self.waiting_for_confirmation = False
-                return apply_code_patch(self.pending_patch)
+                result = apply_code_patch(self.pending_patch)
+                self._update_history(user_input, result)
+                return result
             elif user_input.lower() in ["no", "不", "取消", "n"]:
                 self.waiting_for_confirmation = False
+                self.pending_patch = None
                 return "❌ 已取消"
             else:
                 return "回复 yes 确认，no 取消"
@@ -179,18 +225,25 @@ class Agent:
         # 重置命令
         if user_input in ["!reset", "重置"]:
             self.history = []
+            save_history(self.user_id, self.history)
             return "✅ 已重置"
 
+        # 模型切换命令
+        if user_input.startswith("/model"):
+            parts = user_input.split()
+            if len(parts) == 2:
+                return self.switch_model(parts[1])
+            keys = ", ".join(AVAILABLE_MODELS.keys())
+            return f"用法: /model <模型>\n可用模型: {keys}\n当前: {self.get_current_model()}"
+
         try:
-            # 构建消息
             messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
             for msg in self.history:
                 messages.append({"role": msg["role"], "content": msg["parts"][0]})
             messages.append({"role": "user", "content": user_input})
 
-            # 调用 Groq
             response = client.chat.completions.create(
-                model=MODEL_NAME,
+                model=self.current_model,
                 messages=messages,
                 temperature=0.5,
                 max_tokens=2048,
@@ -200,11 +253,9 @@ class Agent:
 
             reply = response.choices[0].message
 
-            # 处理工具调用
             if reply.tool_calls:
                 return await self._handle_tools(reply, user_input, channel)
 
-            # 直接返回文本
             self._update_history(user_input, reply.content)
             return reply.content
 
@@ -274,3 +325,4 @@ class Agent:
     def _update_history(self, user_input, reply):
         self.history.append({"role": "user", "parts": [user_input]})
         self.history.append({"role": "assistant", "parts": [reply]})
+        save_history(self.user_id, self.history)
