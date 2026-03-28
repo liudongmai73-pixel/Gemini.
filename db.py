@@ -81,4 +81,4 @@ def load_model_preference(user_id: str) -> str:
     
     if row and row['preferred_model']:
         return row['preferred_model']
-    return None  # 返回 None 使用默认模型
+    return None
