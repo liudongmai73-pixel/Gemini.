@@ -9,13 +9,13 @@ from openai import OpenAI
 from git_manager import GitManager
 from bs4 import BeautifulSoup
 from db import init_db, save_history, load_history, save_user_preference, load_user_preference
-from memory import save_memory, search_memory
-from knowledge import query_knowledge
+from vector_store import save_memory, search_memory, search_knowledge, init_knowledge
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 init_db()
+init_knowledge()
 
 # ========== 配置 ==========
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -25,26 +25,10 @@ nvidia_client = OpenAI(
 )
 
 MODELS = {
-    "gpt": {
-        "provider": "groq",
-        "name": "openai/gpt-oss-120b",
-        "description": "🧠 智商最高，速度最快"
-    },
-    "kimi": {
-        "provider": "groq",
-        "name": "moonshotai/kimi-k2-instruct",
-        "description": "🇨🇳 中文最好，表达自然"
-    },
-    "deepseek": {
-        "provider": "nvidia",
-        "name": "deepseek-ai/deepseek-v3",
-        "description": "🔍 推理能力强，数学好"
-    },
-    "qwen": {
-        "provider": "nvidia",
-        "name": "qwen/qwen2.5-72b-instruct",
-        "description": "🌏 阿里Qwen，中文强"
-    }
+    "gpt": {"provider": "groq", "name": "openai/gpt-oss-120b", "description": "🧠 智商最高，速度最快"},
+    "kimi": {"provider": "groq", "name": "moonshotai/kimi-k2-instruct", "description": "🇨🇳 中文最好，表达自然"},
+    "deepseek": {"provider": "nvidia", "name": "deepseek-ai/deepseek-v3", "description": "🔍 推理能力强，数学好"},
+    "qwen": {"provider": "nvidia", "name": "qwen/qwen2.5-72b-instruct", "description": "🌏 阿里Qwen，中文强"}
 }
 
 DEFAULT_MODEL = "gpt"
@@ -126,7 +110,6 @@ class Agent:
         if model_key not in MODELS:
             keys = ", ".join(MODELS.keys())
             return f"❌ 可用模型: {keys}"
-        
         self.current_model_key = model_key
         save_user_preference(self.user_id, model_key, MODELS[model_key]["provider"])
         return f"✅ 已切换到 **{model_key}**\n{MODELS[model_key]['description']}"
@@ -178,22 +161,20 @@ class Agent:
             return f"用法: `/model <模型>`\n可用: {keys}\n当前: {self.current_model_key}"
 
         # 先查知识库
-        knowledge_answer = query_knowledge(user_input)
-        if knowledge_answer:
-            return knowledge_answer
+        knowledge = search_knowledge(user_input)
+        if knowledge:
+            return "📚 知识库：\n\n" + "\n---\n".join(knowledge)
 
-        # 查向量记忆
+        # 查记忆
         memories = search_memory(self.user_id, user_input)
-        context = ""
-        if memories:
-            context = "\n相关记忆：\n" + "\n".join(memories[:2])
+        context = "\n".join(memories[:2]) if memories else ""
 
         try:
             messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
             for msg in self.history:
                 messages.append({"role": msg["role"], "content": msg["parts"][0]})
             if context:
-                messages.append({"role": "user", "content": f"历史上下文：{context}\n\n当前问题：{user_input}"})
+                messages.append({"role": "user", "content": f"相关记忆：{context}\n\n当前问题：{user_input}"})
             else:
                 messages.append({"role": "user", "content": user_input})
 
@@ -209,8 +190,8 @@ class Agent:
                 return await self._handle_tools(reply, user_input, channel)
 
             self._update_history(user_input, reply.content)
-            save_memory(self.user_id, user_input, {"type": "user_question"})
-            save_memory(self.user_id, reply.content, {"type": "bot_response"})
+            save_memory(self.user_id, user_input, {"type": "user"})
+            save_memory(self.user_id, reply.content, {"type": "bot"})
             return reply.content
 
         except Exception as e:
