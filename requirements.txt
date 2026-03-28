@@ -5,5 +5,5 @@ openai
 gitpython
 requests
 beautifulsoup4
-pinecone-client
+pinecone
 numpy
